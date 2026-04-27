@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Odoo 18 Business Intelligence</title>
+
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800;900&display=swap');
+        body { font-family: 'Inter', sans-serif; background-color: #f8fafc; margin: 0; padding: 0; }
+        .recharts-cartesian-grid-horizontal line,
+        .recharts-cartesian-grid-vertical line { stroke: #f1f5f9; }
+        input[type="date"] {
+            border: 2px solid #e2e8f0;
+            border-radius: 0.75rem;
+            padding: 0.6rem;
+            outline: none;
+            font-weight: 700;
+            color: #1e293b;
+        }
+        .glass-header {
+            background: rgba(255,255,255,0.85);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid #e2e8f0;
+        }
+        .card-grad {
+            background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+            border: 1px solid #e2e8f0;
+        }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    </style>
+</head>
+<body>
+    <div id="odoo-bi-app-root"></div>
+
+    <script type="text/babel">
+    (function() {
+        const { useState, useMemo } = React;
+
+        // ── Iconos SVG inline ──
+        const icons = {
+            Package:     "M16.5 9.4l-9-5.19M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z M3.27 6.96L12 12.01l8.73-5.05M12 22.08V12",
+            TrendingUp:  "M23 6l-9.5 9.5-5-5L1 18 M17 6h6v6",
+            Activity:    "M22 12h-4l-3 9L9 3l-3 9H2",
+            ShoppingCart:"M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4zM3 6h18M16 10a4 4 0 01-8 0",
+            ArrowRight:  "M5 12h14M12 5l7 7-7 7",
+            XCircle:     "M22 12A10 10 0 1112 2a10 10 0 0110 10zM15 9l-6 6M9 9l6 6",
+            Info:        "M12 22A10 10 0 1112 2a10 10 0 010 20zM12 8h.01M12 12v4",
+            Calendar:    "M3 4h18v18H3zM16 2v4M8 2v4M3 10h18",
+            Receipt:     "M4 2h16v20l-4-2-4 2-4-2-4 2V2zM8 8h8M8 12h8M8 16h4",
+            Truck:       "M1 3h15v13H1zM16 8h4l3 3v5h-7V8zM5.5 21a2.5 2.5 0 100-5 2.5 2.5 0 000 5zM18.5 21a2.5 2.5 0 100-5 2.5 2.5 0 000 5z",
+        };
+        const Ico = ({ name, size = 24, className = "" }) => (
+            <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" strokeWidth="2" strokeLinecap="round"
+                strokeLinejoin="round" className={className}>
+                <path d={icons[name] || ""} />
+            </svg>
+        );
+
+        // ── Helpers ──
+        const IVA = 1.19;
+        const fmt = v => Math.round(v || 0).toLocaleString('es-CL');
+
+        const cleanNum = v => {
+            if (v === undefined || v === null || v === "") return 0;
+            if (typeof v === 'number') return isFinite(v) ? v : 0;
+            let s = String(v).replace(/[$\s'"]/g, "").trim();
+            const neg = s.startsWith('-');
+            if (neg) s = s.slice(1);
+            if (s.includes('.') && s.includes(',')) s = s.replace(/\./g,'').replace(',','.');
+            else if (s.includes(',')) s = s.replace(',','.');
+            else if (s.includes('.')) {
+                const parts = s.split('.');
+                if (parts.length > 2 || parts[parts.length-1].length === 3) s = s.replace(/\./g,'');
+            }
+            const n = parseFloat(s);
+            return isFinite(n) ? (neg ? -n : n) : 0;
+        };
+
+        // Siempre devuelve fecha en hora local sin UTC shift
+        const parseDate = d => {
+            if (!d) return null;
+            if (d instanceof Date && !isNaN(d)) {
+                return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+            }
+            const MS = {ene:0,feb:1,mar:2,abr:3,may:4,jun:5,jul:6,ago:7,sep:8,oct:9,nov:10,dic:11};
+            const str = String(d).toLowerCase().trim();
+            if (/^\d{4}-\d{2}-\d{2}/.test(str)) {
+                const [y,m,dd] = str.substring(0,10).split('-').map(Number);
+                return new Date(y, m-1, dd);
+            }
+            const p = str.split(/\s+/);
+            if (p.length >= 3) {
+                const day = parseInt(p[0]);
+                const mon = MS[p[1].substring(0,3)];
+                const year = parseInt(p[2]);
+                if (!isNaN(day) && mon !== undefined && !isNaN(year)) return new Date(year, mon, day);
+            }
+            return null;
+        };
+
+        // Clave de fecha como string "YYYY-MM-DD" para comparaciones seguras
+        const dk = d => d ? `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}` : '';
+
+        const norm = n => n ? n.toString().toLowerCase().replace(/^\.+/,'').trim().replace(/[^a-z0-9]/g,'') : '';
+
+        // ── App ──
+        const BusinessApp = () => {
+            const [posData,       setPosData]       = useState({ items: [], dailyOrders: {} });
+            const [valuationData, setValuationData] = useState([]);
+            const [fixedCosts,    setFixedCosts]    = useState(400000);
+            const [dailyGoal,     setDailyGoal]     = useState(150000);
+            const [coverageDays,  setCoverageDays]  = useState(10);
+            const [activeTab,     setActiveTab]     = useState('import');
+            const [fileStatus,    setFileStatus]    = useState({ pos: 'idle', val: 'idle' });
+            const [fileNames,     setFileNames]     = useState({ pos: '', val: '' });
+            const [errorMsg,      setErrorMsg]      = useState('');
+            const [dateRange,     setDateRange]     = useState({ from: '', to: '' });
+
+            // RC se lee en render-time (no en module-load), garantizando que Recharts ya cargó
+            const RC = window.Recharts;
+
+            const onUpload = (e, type) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                setErrorMsg('');
+                setFileStatus(p => ({ ...p, [type]: 'loading' }));
+                const reader = new FileReader();
+                reader.onload = ev => {
+                    try {
+                        // cellDates:false → leemos fechas como strings/seriales y las parseamos nosotros
+                        const wb = XLSX.read(new Uint8Array(ev.target.result), { type:'array', cellDates:false });
+                        const raw = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header:1, defval:'' });
+
+                        if (type === 'pos') {
+                            const hIdx = raw.findIndex(r => Array.isArray(r) && r.some(c => String(c).toLowerCase().includes('precio total')));
+                            if (hIdx === -1) throw new Error("No se halló la columna 'Precio total'. Verifica el formato del archivo.");
+                            const heads = raw[hIdx].map(h => String(h).toLowerCase().trim());
+                            const ordIdx = heads.indexOf('pedido');
+                            const qtyIdx = heads.findIndex(h => h.includes('cantidad'));
+                            const prcIdx = heads.findIndex(h => h.includes('precio total'));
+
+                            let curD = null, items = [], ords = {}, maxD = null;
+                            raw.slice(hIdx + 1).forEach(r => {
+                                const n = String(r[0] || '').trim();
+                                if (/\d{2}\s[a-z]{3}\s\d{4}/i.test(n)) {
+                                    curD = parseDate(n);
+                                    if (curD) {
+                                        ords[dk(curD)] = cleanNum(r[ordIdx]);
+                                        if (!maxD || curD > maxD) maxD = new Date(curD.getFullYear(), curD.getMonth(), curD.getDate());
+                                    }
+                                } else if (n && curD && n.toLowerCase() !== 'total') {
+                                    const gr = cleanNum(r[prcIdx]);
+                                    items.push({
+                                        fecha: new Date(curD.getFullYear(), curD.getMonth(), curD.getDate()),
+                                        p: n, q: cleanNum(r[qtyIdx]), gr, nt: gr / IVA
+                                    });
+                                }
+                            });
+
+                            if (items.length === 0) throw new Error("El archivo no tiene datos de ventas reconocibles. Verifica el formato.");
+                            console.log(`POS: ${items.length} items, ${Object.keys(ords).length} días, maxD=${maxD}`);
+
+                            setPosData({ items, dailyOrders: ords });
+                            if (maxD) {
+                                const s = new Date(maxD.getFullYear(), maxD.getMonth(), maxD.getDate() - 6);
+                                setDateRange({ from: dk(s), to: dk(maxD) });
+                            }
+                        } else {
+                            const hIdx = raw.findIndex(r => Array.isArray(r) && r.some(c => String(c).toLowerCase().includes('valor total')));
+                            if (hIdx === -1) throw new Error("No se halló el encabezado 'Valor total' en el archivo de valoración.");
+                            const items = raw.slice(hIdx + 1).map(r => ({
+                                fecha: parseDate(r[1]),
+                                p: String(r[2] || '').trim(),
+                                v: cleanNum(r[5]),
+                                qo: cleanNum(r[0])
+                            })).filter(r => r.p && r.p.toLowerCase() !== 'total');
+                            console.log(`Valoración: ${items.length} movimientos`);
+                            setValuationData(items);
+                        }
+                        setFileStatus(p => ({ ...p, [type]: 'success' }));
+                        setFileNames(p => ({ ...p, [type]: file.name }));
+                    } catch (err) {
+                        console.error('Upload error:', err);
+                        setErrorMsg(err.message);
+                        setFileStatus(p => ({ ...p, [type]: 'error' }));
+                    }
+                };
+                reader.readAsArrayBuffer(file);
+            };
+
+            const report = useMemo(() => {
+                if (!dateRange.from || !dateRange.to || posData.items.length === 0) return null;
+
+                const fromKey = dateRange.from;
+                const toKey   = dateRange.to;
+                const [fy,fm,fd] = fromKey.split('-').map(Number);
+                const [ty,tm,td] = toKey.split('-').map(Number);
+                const startDate = new Date(fy, fm-1, fd);
+                const endDate   = new Date(ty, tm-1, td);
+                const daysCount = Math.max(1, Math.round((endDate - startDate) / 86400000) + 1);
+
+                const prevEnd   = new Date(fy, fm-1, fd-1);
+                const prevStart = new Date(fy, fm-1, fd-daysCount);
+                const prevFromKey = dk(prevStart);
+                const prevToKey   = dk(prevEnd);
+
+                const filt = (l, fk, tk) => l.filter(d => { if (!d.fecha) return false; const k = dk(d.fecha); return k >= fk && k <= tk; });
+
+                const curS  = filt(posData.items,  fromKey,     toKey);
+                const prevS = filt(posData.items,  prevFromKey, prevToKey);
+                const curV  = filt(valuationData,  fromKey,     toKey);
+
+                console.log(`Report: curS=${curS.length}, prevS=${prevS.length}, curV=${curV.length}, días=${daysCount}`);
+
+                const invMap = {};
+                curS.forEach(s => {
+                    const k = norm(s.p);
+                    if (!invMap[k]) invMap[k] = { n: s.p, pq:0, vq:0, nr:0, c:0 };
+                    invMap[k].pq += s.q;
+                    invMap[k].nr += s.nt;
+                });
+                curV.forEach(c => {
+                    const k = norm(c.p);
+                    if (!invMap[k]) invMap[k] = { n: c.p, pq:0, vq:0, nr:0, c:0 };
+                    if (c.v < 0) { invMap[k].vq += Math.abs(c.qo); invMap[k].c += Math.abs(c.v); }
+                });
+                const purchasePlan = Object.values(invMap).map(i => {
+                    const out = Math.max(i.pq, i.vq);
+                    const avg = out / daysCount;
+                    return { ...i, out, avg, sk: avg * Number(coverageDays) };
+                }).filter(p => p.out > 0).sort((a,b) => b.out - a.out);
+
+                const wNames = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
+                let totalOrders = 0;
+                const dStats = [];
+                let it = new Date(startDate);
+                while (dk(it) <= toKey) {
+                    const dki  = dk(it);
+                    const net  = curS.filter(s => dk(s.fecha) === dki).reduce((a,b) => a + b.nt, 0);
+                    const o    = posData.dailyOrders[dki] || 0;
+                    totalOrders += o;
+                    const daysOffset = Math.round((it - startDate) / 86400000);
+                    const prevDay = new Date(prevStart.getFullYear(), prevStart.getMonth(), prevStart.getDate() + daysOffset);
+                    const pNet = prevS.filter(s => dk(s.fecha) === dk(prevDay)).reduce((a,b) => a + b.nt, 0);
+                    dStats.push({
+                        label:    `${wNames[it.getDay()]} ${it.getDate()}/${it.getMonth()+1}`,
+                        Actual:   Math.round(net),
+                        Anterior: Math.round(pNet),
+                        Meta:     Number(dailyGoal),
+                        pedidos:  o
+                    });
+                    it.setDate(it.getDate() + 1);
+                }
+
+                const tNet = Math.round(curS.reduce((a,b) => a + b.nt, 0));
+                const tGr  = Math.round(curS.reduce((a,b) => a + b.gr, 0));
+                const tCst = Math.round(curV.reduce((a,b) => a - b.v,  0));
+                const gM   = tNet - tCst;
+                const pct  = tNet > 0 ? gM / tNet : 0;
+
+                return {
+                    tNet, tGr, tIva: tGr - tNet, tCst, totalOrders,
+                    gM, nM: gM - Number(fixedCosts),
+                    be: pct > 0 ? Number(fixedCosts) / pct : 0,
+                    at: totalOrders > 0 ? Math.round(tNet / totalOrders) : 0,
+                    dStats, purchasePlan, daysCount
+                };
+            }, [posData, valuationData, dateRange, fixedCosts, dailyGoal, coverageDays]);
+
+            const tabs = [
+                { id:'import',      label:'Configurar' },
+                { id:'dashboard',   label:'Finanzas' },
+                { id:'procurement', label:'Logística' },
+            ];
+
+            return (
+                <div className="min-h-screen pb-20">
+                    <header className="max-w-7xl mx-auto py-6 px-6 flex flex-col md:flex-row items-center justify-between glass-header sticky top-0 z-50 rounded-b-3xl shadow-sm mb-10">
+                        <div className="flex items-center gap-4">
+                            <div className="bg-emerald-600 p-3 rounded-2xl shadow-lg text-white"><Ico name="Package" size={32} /></div>
+                            <div>
+                                <h1 className="text-2xl font-black text-slate-800 uppercase italic tracking-tighter">Odoo Analyzer PRO</h1>
+                                <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Enterprise Edition v1.22</p>
+                            </div>
+                        </div>
+                        <nav className="flex bg-slate-100 p-1.5 rounded-2xl mt-4 md:mt-0 gap-1">
+                            {tabs.map(t => (
+                                <button key={t.id} onClick={() => setActiveTab(t.id)}
+                                    className={`px-6 py-2 rounded-xl text-xs font-black uppercase transition-all ${activeTab === t.id ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}>
+                                    {t.label}
+                                </button>
+                            ))}
+                        </nav>
+                    </header>
+
+                    <main className="max-w-7xl mx-auto px-6">
+                        {errorMsg && (
+                            <div className="bg-red-50 border-2 border-red-200 text-red-600 p-5 rounded-3xl mb-8 flex items-center gap-4 font-bold">
+                                <Ico name="XCircle" /> {errorMsg}
+                            </div>
+                        )}
+
+                        {/* CONFIGURAR */}
+                        {activeTab === 'import' && (
+                            <div className="space-y-8">
+                                <div className="grid lg:grid-cols-2 gap-8">
+                                    <label className={`card-grad p-12 rounded-[3rem] border-4 border-dashed transition-all text-center cursor-pointer block ${fileStatus.pos === 'success' ? 'border-emerald-500 bg-emerald-50' : fileStatus.pos === 'error' ? 'border-red-400' : 'border-slate-200 hover:border-emerald-400'}`}>
+                                        <input type="file" onChange={e => onUpload(e,'pos')} className="hidden" accept=".xlsx,.xls,.csv" />
+                                        <div className="flex justify-center mb-4 text-emerald-600"><Ico name="ShoppingCart" size={48} /></div>
+                                        <h3 className="text-xl font-black uppercase">Ventas PoS</h3>
+                                        <p className="text-slate-400 text-sm mt-2 italic">{fileNames.pos || 'Sube el archivo pivot jerárquico'}</p>
+                                        {fileStatus.pos === 'success' && <p className="text-emerald-600 text-xs font-black mt-3 uppercase">✓ Cargado — {posData.items.length} registros</p>}
+                                        {fileStatus.pos === 'loading' && <p className="text-amber-500 text-xs font-black mt-3">Procesando…</p>}
+                                        {fileStatus.pos === 'error'   && <p className="text-red-500 text-xs font-black mt-3">✗ Error al leer</p>}
+                                    </label>
+                                    <label className={`card-grad p-12 rounded-[3rem] border-4 border-dashed transition-all text-center cursor-pointer block ${fileStatus.val === 'success' ? 'border-emerald-500 bg-emerald-50' : fileStatus.val === 'error' ? 'border-red-400' : 'border-slate-200 hover:border-blue-400'}`}>
+                                        <input type="file" onChange={e => onUpload(e,'val')} className="hidden" accept=".xlsx,.xls,.csv" />
+                                        <div className="flex justify-center mb-4 text-blue-600"><Ico name="Activity" size={48} /></div>
+                                        <h3 className="text-xl font-black uppercase">Capa Valoración</h3>
+                                        <p className="text-slate-400 text-sm mt-2 italic">{fileNames.val || 'Sube el stock valuation (opcional)'}</p>
+                                        {fileStatus.val === 'success' && <p className="text-emerald-600 text-xs font-black mt-3 uppercase">✓ Cargado — {valuationData.length} movimientos</p>}
+                                        {fileStatus.val === 'loading' && <p className="text-amber-500 text-xs font-black mt-3">Procesando…</p>}
+                                        {fileStatus.val === 'error'   && <p className="text-red-500 text-xs font-black mt-3">✗ Error al leer</p>}
+                                    </label>
+                                </div>
+                                <div className="grid md:grid-cols-3 gap-6">
+                                    <div className="bg-slate-900 p-8 rounded-[2.5rem] text-white border-b-8 border-emerald-600 shadow-xl">
+                                        <p className="text-[10px] font-black uppercase text-emerald-400 mb-2">Gastos Fijos Semanales</p>
+                                        <input type="number" value={fixedCosts} onChange={e => setFixedCosts(e.target.value)}
+                                            className="bg-transparent text-3xl font-black outline-none w-full border-b border-slate-700 pb-2 text-white" />
+                                    </div>
+                                    <div className="bg-slate-900 p-8 rounded-[2.5rem] text-white border-b-8 border-blue-600 shadow-xl">
+                                        <p className="text-[10px] font-black uppercase text-blue-400 mb-2">Meta Diaria (Neto)</p>
+                                        <input type="number" value={dailyGoal} onChange={e => setDailyGoal(e.target.value)}
+                                            className="bg-transparent text-3xl font-black outline-none w-full border-b border-slate-700 pb-2 text-white" />
+                                    </div>
+                                    <div className="bg-slate-900 p-8 rounded-[2.5rem] text-white border-b-8 border-orange-600 shadow-xl">
+                                        <p className="text-[10px] font-black uppercase text-orange-400 mb-2">Días de Stock</p>
+                                        <input type="number" value={coverageDays} onChange={e => setCoverageDays(e.target.value)}
+                                            className="bg-transparent text-3xl font-black outline-none w-full border-b border-slate-700 pb-2 text-white" />
+                                    </div>
+                                </div>
+                                {posData.items.length > 0 && (
+                                    <button onClick={() => setActiveTab('dashboard')}
+                                        className="w-full bg-emerald-600 text-white py-6 rounded-[2rem] font-black text-xl shadow-2xl flex items-center justify-center gap-4 hover:bg-emerald-700 transition-all uppercase tracking-widest">
+                                        INICIAR ANÁLISIS <Ico name="ArrowRight" size={28} />
+                                    </button>
+                                )}
+                            </div>
+                        )}
+
+                        {/* LOGÍSTICA */}
+                        {activeTab === 'procurement' && (
+                            report ? (
+                                <div className="space-y-8">
+                                    <div className="bg-blue-600 p-10 rounded-[3rem] text-white flex flex-col md:flex-row items-center justify-between shadow-2xl border-b-8 border-blue-800 gap-6">
+                                        <div className="flex items-center gap-6">
+                                            <Ico name="Truck" size={56} />
+                                            <div>
+                                                <h2 className="text-3xl font-black italic uppercase tracking-tighter">Plan de Reposición</h2>
+                                                <p className="opacity-80 font-medium max-w-md">Stock mínimo para {coverageDays} días basado en demanda del rango.</p>
+                                            </div>
+                                        </div>
+                                        <div className="bg-blue-800 p-6 rounded-3xl border border-blue-400 text-center min-w-[200px]">
+                                            <p className="text-xs font-black uppercase opacity-60">Consumo basado en</p>
+                                            <p className="text-5xl font-black">{report.daysCount} Días</p>
+                                        </div>
+                                    </div>
+                                    <div className="bg-white rounded-[3.5rem] shadow-sm overflow-hidden border">
+                                        <div className="overflow-x-auto">
+                                            <table className="w-full text-left">
+                                                <thead className="bg-slate-50 text-[10px] font-black uppercase text-slate-400 border-b">
+                                                    <tr>
+                                                        <th className="px-10 py-6">Producto</th>
+                                                        <th className="text-right px-10 py-6">Salidas</th>
+                                                        <th className="text-right px-10 py-6">Vta Diaria</th>
+                                                        <th className="text-right px-10 py-6 bg-blue-50 text-blue-600 italic">Mínimo Sugerido</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody className="divide-y font-bold text-slate-700">
+                                                    {report.purchasePlan.map((i, idx) => (
+                                                        <tr key={idx} className="hover:bg-slate-50 transition-colors">
+                                                            <td className="px-10 py-5 text-lg font-black text-slate-800">{i.n}</td>
+                                                            <td className="px-10 py-5 text-right">{i.out.toFixed(2)}</td>
+                                                            <td className="px-10 py-5 text-right text-slate-400 italic">{i.avg.toFixed(3)}</td>
+                                                            <td className="px-10 py-5 text-right font-black text-2xl text-blue-600 bg-blue-50 italic">${i.sk.toFixed(2)}</td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="text-center py-32 bg-white rounded-[4rem] border-4 border-dashed border-slate-100">
+                                    <p className="text-2xl font-black text-slate-400 uppercase italic">Carga primero el archivo PoS</p>
+                                    <button onClick={() => setActiveTab('import')} className="mt-6 bg-slate-800 text-white px-8 py-3 rounded-2xl font-black uppercase text-sm">Ir a Configurar</button>
+                                </div>
+                            )
+                        )}
+
+                        {/* FINANZAS */}
+                        {activeTab === 'dashboard' && (
+                            report ? (
+                                <div className="space-y-8">
+                                    {/* Selector fechas */}
+                                    <div className="grid lg:grid-cols-3 gap-6">
+                                        <div className="lg:col-span-2 bg-white p-8 rounded-[2.5rem] border shadow-sm flex items-center gap-8">
+                                            <div className="bg-blue-600 p-4 rounded-3xl text-white shadow-lg"><Ico name="Calendar" size={28} /></div>
+                                            <div className="flex-1 grid grid-cols-2 gap-4">
+                                                <div>
+                                                    <label className="text-[10px] font-black uppercase text-slate-400 block mb-1">Periodo Desde</label>
+                                                    <input type="date" value={dateRange.from} onChange={e => setDateRange(p => ({...p, from: e.target.value}))} className="w-full" />
+                                                </div>
+                                                <div>
+                                                    <label className="text-[10px] font-black uppercase text-slate-400 block mb-1">Periodo Hasta</label>
+                                                    <input type="date" value={dateRange.to} onChange={e => setDateRange(p => ({...p, to: e.target.value}))} className="w-full" />
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div className="bg-slate-800 p-8 rounded-[2.5rem] text-white flex items-center justify-between border-b-8 border-emerald-500 shadow-xl">
+                                            <div>
+                                                <p className="text-[10px] font-black text-slate-400 uppercase mb-1">Control IVA (19%)</p>
+                                                <p className="text-xs font-bold text-slate-400">Bruto: ${fmt(report.tGr)}</p>
+                                                <p className="text-2xl font-black text-emerald-400 italic">Neto: ${fmt(report.tNet)}</p>
+                                            </div>
+                                            <div className="bg-slate-700 p-4 rounded-2xl"><Ico name="Receipt" size={24} /></div>
+                                        </div>
+                                    </div>
+
+                                    {/* KPIs */}
+                                    <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4 font-black">
+                                        <div className="bg-white p-6 rounded-3xl border border-b-8 border-b-blue-600 shadow-sm">
+                                            <p className="text-[10px] text-slate-400 mb-1">Ventas Netas</p>
+                                            <h2 className="text-xl">${fmt(report.tNet)}</h2>
+                                        </div>
+                                        <div className="bg-white p-6 rounded-3xl border border-b-8 border-b-emerald-600 shadow-sm">
+                                            <p className="text-[10px] text-slate-400 mb-1">Costos</p>
+                                            <h2 className="text-xl text-emerald-600">${fmt(report.tCst)}</h2>
+                                        </div>
+                                        <div className="bg-blue-600 p-6 rounded-3xl border border-b-8 border-b-blue-800 text-white shadow-lg">
+                                            <p className="text-[10px] text-blue-200 mb-1 uppercase">Mgn Bruto</p>
+                                            <h2 className="text-xl italic">${fmt(report.gM)}</h2>
+                                        </div>
+                                        <div className="bg-emerald-700 p-6 rounded-3xl border border-b-8 border-b-emerald-900 text-white shadow-lg">
+                                            <p className="text-[10px] text-emerald-200 mb-1 uppercase">Utilidad</p>
+                                            <h2 className="text-xl italic">${fmt(report.nM)}</h2>
+                                        </div>
+                                        <div className="bg-white p-6 rounded-3xl border border-b-8 border-b-indigo-600 text-indigo-600 shadow-sm">
+                                            <p className="text-[10px] text-slate-400 mb-1">Tkt Promedio</p>
+                                            <h2 className="text-xl">${fmt(report.at)}</h2>
+                                        </div>
+                                        <div className="bg-white p-6 rounded-3xl border border-b-8 border-b-orange-600 text-orange-600 shadow-sm">
+                                            <p className="text-[10px] text-slate-400 mb-1 uppercase">Pedidos</p>
+                                            <h2 className="text-xl">{report.totalOrders}</h2>
+                                        </div>
+                                    </div>
+
+                                    {/* Gráfico + tabla */}
+                                    <div className="grid lg:grid-cols-3 gap-8">
+                                        <div className="lg:col-span-2 bg-white p-10 rounded-[3rem] border shadow-sm">
+                                            <h3 className="text-2xl font-black mb-10 flex items-center gap-3 italic tracking-tighter uppercase">
+                                                <span className="text-blue-600"><Ico name="TrendingUp" size={28} /></span> Comparativa Diaria
+                                            </h3>
+                                            {RC ? (
+                                                <div style={{height:400}}>
+                                                    <RC.ResponsiveContainer width="100%" height="100%">
+                                                        <RC.ComposedChart data={report.dStats}>
+                                                            <RC.CartesianGrid strokeDasharray="3 3" vertical={false} />
+                                                            <RC.XAxis dataKey="label" fontSize={11} axisLine={false} tickLine={false} />
+                                                            <RC.YAxis fontSize={12} axisLine={false} tickLine={false} tickFormatter={v => `$${(v/1000).toFixed(0)}k`} />
+                                                            <RC.Tooltip cursor={{fill:'#f8fafc'}} contentStyle={{borderRadius:'24px',border:'none',boxShadow:'0 10px 30px rgba(0,0,0,0.1)'}} formatter={v => [`$${fmt(v)}`]} />
+                                                            <RC.Legend verticalAlign="top" align="right" height={40} />
+                                                            <RC.Bar dataKey="Anterior" name="Periodo Ant." fill="#e2e8f0" radius={[6,6,0,0]} barSize={20} />
+                                                            <RC.Bar dataKey="Actual" name="Ventas Hoy" fill="#2563eb" radius={[6,6,0,0]} barSize={20} />
+                                                            <RC.Line type="monotone" dataKey="Meta" name="Meta Diaria" stroke="#f43f5e" strokeWidth={4} strokeDasharray="8 8" dot={false} />
+                                                        </RC.ComposedChart>
+                                                    </RC.ResponsiveContainer>
+                                                </div>
+                                            ) : (
+                                                <div className="overflow-x-auto">
+                                                    <table className="w-full text-sm font-bold">
+                                                        <thead><tr className="border-b text-slate-400 text-xs uppercase">
+                                                            <th className="py-2 text-left">Día</th>
+                                                            <th className="py-2 text-right">Actual</th>
+                                                            <th className="py-2 text-right">Anterior</th>
+                                                            <th className="py-2 text-right">Meta</th>
+                                                        </tr></thead>
+                                                        <tbody>{report.dStats.map((d,i) => (
+                                                            <tr key={i} className="border-b">
+                                                                <td className="py-2">{d.label}</td>
+                                                                <td className="py-2 text-right text-blue-600">${fmt(d.Actual)}</td>
+                                                                <td className="py-2 text-right text-slate-400">${fmt(d.Anterior)}</td>
+                                                                <td className="py-2 text-right text-rose-500">${fmt(d.Meta)}</td>
+                                                            </tr>
+                                                        ))}</tbody>
+                                                    </table>
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        {/* Cierre de caja */}
+                                        <div className="bg-white rounded-[3.5rem] border shadow-lg overflow-hidden flex flex-col">
+                                            <div className="p-8 border-b bg-slate-50">
+                                                <h3 className="text-xs font-black text-slate-800 uppercase italic tracking-widest text-center">Cierre de Caja</h3>
+                                            </div>
+                                            <div className="flex-1 overflow-y-auto no-scrollbar">
+                                                <table className="w-full text-left text-sm font-black">
+                                                    <thead className="bg-slate-50 text-[10px] font-black uppercase text-slate-400 border-b">
+                                                        <tr>
+                                                            <th className="px-6 py-4">Día</th>
+                                                            <th className="px-6 py-4 text-right">Venta Neta</th>
+                                                            <th className="px-6 py-4 text-right">Pedidos</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody className="divide-y text-slate-700">
+                                                        {report.dStats.map((d, i) => (
+                                                            <tr key={i} className={d.Actual >= d.Meta ? 'bg-emerald-50' : ''}>
+                                                                <td className="px-6 py-4 text-xs font-black">{d.label}</td>
+                                                                <td className={`px-6 py-4 text-right font-black ${d.Actual >= d.Meta ? 'text-emerald-600' : ''}`}>${fmt(d.Actual)}</td>
+                                                                <td className="px-6 py-4 text-right text-orange-600">{d.pedidos}</td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                            <div className="p-8 bg-rose-600 text-white border-t-4 border-rose-700">
+                                                <p className="text-[10px] font-black uppercase opacity-70 mb-1">Ventas Necesarias (Equilibrio):</p>
+                                                <p className="text-4xl font-black italic tracking-tighter">${fmt(report.be)}</p>
+                                                <p className="text-[9px] font-bold opacity-40 uppercase mt-2 tracking-widest leading-tight">Monto neto para punto de equilibrio</p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="text-center py-40 bg-white rounded-[4rem] border-4 border-dashed border-slate-100 shadow-inner">
+                                    <div className="bg-slate-50 p-10 rounded-full w-fit mx-auto mb-8 text-slate-300 shadow-inner">
+                                        <Ico name="Info" size={80} />
+                                    </div>
+                                    <h2 className="text-3xl font-black text-slate-800 tracking-tight uppercase italic">Esperando Reportes</h2>
+                                    <p className="text-slate-400 mt-2 font-semibold max-w-lg mx-auto text-lg leading-relaxed">
+                                        Carga el archivo PoS en la pestaña Configurar para comenzar.
+                                    </p>
+                                    <button onClick={() => setActiveTab('import')}
+                                        className="mt-8 bg-slate-800 text-white px-10 py-4 rounded-2xl font-black uppercase text-sm tracking-widest hover:bg-slate-700 transition-all">
+                                        Ir a Configurar
+                                    </button>
+                                </div>
+                            )
+                        )}
+                    </main>
+
+                    <footer className="max-w-7xl mx-auto mt-24 py-12 border-t text-center opacity-30 italic font-black text-[10px] uppercase tracking-[0.5em]">
+                        Odoo Community 18 Analyzer · Strategic Enterprise BI v1.22
+                    </footer>
+                </div>
+            );
+        };
+
+        ReactDOM.createRoot(document.getElementById('odoo-bi-app-root')).render(<BusinessApp />);
+    })();
+    </script>
+</body>
+</html>

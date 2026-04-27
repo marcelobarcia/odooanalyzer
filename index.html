@@ -210,7 +210,6 @@
                 const startDate = new Date(fy, fm-1, fd), endDate = new Date(ty, tm-1, td);
                 const daysCount = Math.max(1, Math.round((endDate - startDate) / 86400000) + 1);
 
-                // Cálculo periodo anterior
                 const prevStart = new Date(fy, fm-1, fd - daysCount);
                 const prevEnd = new Date(fy, fm-1, fd - 1);
 
@@ -251,7 +250,6 @@
                     const o = posData.dailyOrders[dki] || 0;
                     totalOrders += o;
 
-                    // Buscar valor correspondiente en semana anterior
                     const daysOffset = Math.round((it - startDate) / 86400000);
                     const pDate = new Date(prevStart.getFullYear(), prevStart.getMonth(), prevStart.getDate() + daysOffset);
                     const pNet = prevS.filter(s => dk(s.fecha) === dk(pDate)).reduce((a,b) => a + b.nt, 0);
@@ -275,19 +273,21 @@
 
             const handleExportLogistics = () => {
                 if (!report) return;
+                // Ajustamos el mapeo para pasar NÚMEROS, no strings.
+                // Excel los reconocerá como numéricos y permitirá sumas.
                 const exportData = report.purchasePlan.map(p => ({
                     "Producto": p.n,
-                    "Total Vendido": p.out.toFixed(2),
-                    "Venta Promedio Diaria": p.avg.toFixed(3),
-                    [`Stock Sugerido (${coverageDays} días)`]: p.sk.toFixed(2),
-                    "Venta Neta en Rango": p.nr.toFixed(0),
-                    "Costo Acumulado": p.c.toFixed(0),
-                    "Margen %": (p.margin * 100).toFixed(1) + "%"
+                    "Total Vendido": Number(p.out.toFixed(2)),
+                    "Venta Promedio Diaria": Number(p.avg.toFixed(3)),
+                    [`Stock Sugerido (${coverageDays} dias)`]: Number(p.sk.toFixed(2)),
+                    "Venta Neta en Rango": Math.round(p.nr),
+                    "Costo Acumulado": Math.round(p.c),
+                    "Margen Bruto (%)": Number((p.margin * 100).toFixed(1))
                 }));
                 const ws = XLSX.utils.json_to_sheet(exportData);
                 const wb = XLSX.utils.book_new();
-                XLSX.utils.book_append_sheet(wb, ws, "Plan de Reposición");
-                XLSX.writeFile(wb, `Plan_Reposicion_${dateRange.from}_al_${dateRange.to}.xlsx`);
+                XLSX.utils.book_append_sheet(wb, ws, "Logistica");
+                XLSX.writeFile(wb, `Logistica_Odoo_${dateRange.from}.xlsx`);
             };
 
             return (
@@ -297,7 +297,7 @@
                             <div className="bg-emerald-600 p-3 rounded-2xl shadow-lg text-white"><Ico name="Package" size={32} /></div>
                             <div>
                                 <h1 className="text-2xl font-black text-slate-800 uppercase italic tracking-tighter">Odoo Analyzer PRO</h1>
-                                <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Enterprise Analytics v2.0</p>
+                                <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Enterprise Analytics v2.1</p>
                             </div>
                         </div>
                         <nav className="flex bg-slate-100 p-1.5 rounded-2xl mt-4 md:mt-0 gap-1">
@@ -394,7 +394,7 @@
                                         <div className="lg:col-span-2 space-y-8">
                                             <div className="bg-white p-10 rounded-[3rem] border shadow-sm">
                                                 <h3 className="text-2xl font-black mb-10 italic uppercase tracking-tighter flex items-center gap-3">
-                                                    <Ico name="TrendingUp" className="text-blue-600" /> Evolución Diaria vs Semana Anterior
+                                                    <Ico name="TrendingUp" className="text-blue-600" /> Evolución Diaria vs Anterior
                                                 </h3>
                                                 <div style={{height:400}}>
                                                     <RC.ResponsiveContainer width="100%" height="100%">
@@ -404,10 +404,8 @@
                                                             <RC.YAxis fontSize={12} axisLine={false} tickLine={false} tickFormatter={v => `$${(v/1000).toFixed(0)}k`} />
                                                             <RC.Tooltip cursor={{fill:'#f8fafc'}} contentStyle={{borderRadius:'24px',border:'none',boxShadow:'0 10px 30px rgba(0,0,0,0.1)'}} formatter={v => [`$${fmt(v)}`]} />
                                                             <RC.Legend verticalAlign="top" align="right" height={40} />
-                                                            {/* Comparativa barras */}
-                                                            <RC.Bar dataKey="Anterior" name="Semana Ant." fill="#e2e8f0" radius={[6,6,0,0]} barSize={25} />
+                                                            <RC.Bar dataKey="Anterior" name="Periodo Ant." fill="#e2e8f0" radius={[6,6,0,0]} barSize={25} />
                                                             <RC.Bar dataKey="Actual" name="Venta Neta" fill="#2563eb" radius={[6,6,0,0]} barSize={25} />
-                                                            {/* Meta */}
                                                             <RC.Line type="monotone" dataKey="Meta" name="Meta Diaria" stroke="#f43f5e" strokeWidth={4} strokeDasharray="8 8" dot={false} />
                                                         </RC.ComposedChart>
                                                     </RC.ResponsiveContainer>
@@ -500,7 +498,7 @@
                     </main>
 
                     <footer className="max-w-7xl mx-auto mt-24 py-12 border-t text-center opacity-30 italic font-black text-[10px] uppercase tracking-[0.5em]">
-                        Odoo Strategic BI · v2.0 Comparative Analysis
+                        Odoo Strategic BI · v2.1 Analysis Fixed
                     </footer>
                 </div>
             );

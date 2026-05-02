@@ -421,7 +421,9 @@
                                                     <RC.XAxis dataKey="label" fontSize={10} axisLine={false} tickLine={false} />
                                                     <RC.YAxis fontSize={12} axisLine={false} tickLine={false} tickFormatter={v => `$${(v/1000).toFixed(0)}k`} />
                                                     <RC.Tooltip contentStyle={{borderRadius:'24px', border:'none', boxShadow:'0 10px 30px rgba(0,0,0,0.1)'}} />
+                                                    <RC.Legend verticalAlign="top" height={36}/>
                                                     <RC.Bar dataKey="Actual" name="Venta Actual" fill="#2563eb" radius={[6,6,0,0]} barSize={25} />
+                                                    <RC.Line type="monotone" dataKey="Anterior" name="Semana Anterior" stroke="#cbd5e1" strokeWidth={2} dot={false} strokeDasharray="4 4" />
                                                     <RC.Line type="monotone" dataKey="Meta" name="Meta" stroke="#f43f5e" strokeWidth={3} strokeDasharray="8 8" dot={false} />
                                                 </RC.ComposedChart>
                                             </RC.ResponsiveContainer>
@@ -440,6 +442,7 @@
                                                     <RC.YAxis yAxisId="left" fontSize={12} axisLine={false} tickLine={false} />
                                                     <RC.YAxis yAxisId="right" orientation="right" fontSize={12} axisLine={false} tickLine={false} tickFormatter={v => `$${(v/1000).toFixed(0)}k`} />
                                                     <RC.Tooltip contentStyle={{borderRadius:'24px'}} />
+                                                    <RC.Legend verticalAlign="top" height={36}/>
                                                     <RC.Bar yAxisId="left" dataKey="pedidos" name="N° Pedidos" fill="#6366f1" radius={[6,6,0,0]} barSize={20} />
                                                     <RC.Line yAxisId="right" type="stepAfter" dataKey="ticket" name="Ticket Promedio" stroke="#f59e0b" strokeWidth={3} dot={{ r: 4, fill:'#f59e0b' }} />
                                                 </RC.ComposedChart>

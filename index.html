@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Odoo 18 Business Intelligence - Cost Analysis</title>
+    <title>Odoo 18 Business Intelligence - Stock & Finance</title>
 
     <!-- Dependencias Core -->
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -61,7 +61,9 @@
             Calendar:    "M3 4h18v18H3zM16 2v4M8 2v4M3 10h18",
             Truck:       "M1 3h15v13H1zM16 8h4l3 3v5h-7V8zM5.5 21a2.5 2.5 0 100-5 2.5 2.5 0 000 5zM18.5 21a2.5 2.5 0 100-5 2.5 2.5 0 000 5z",
             Download:    "M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4 M7 10l5 5 5-5 M12 15V3",
-            FileText:    "M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z M14 2v6h6 M16 13H8M16 17H8M10 9H8"
+            FileText:    "M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z M14 2v6h6 M16 13H8M16 17H8M10 9H8",
+            Box:         "M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z",
+            BarChart:    "M18 20V10M12 20V4M6 20v-6"
         };
         const Ico = ({ name, size = 24, className = "" }) => (
             <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
@@ -102,7 +104,7 @@
             if (isoMatch) return new Date(parseInt(isoMatch[1]), parseInt(isoMatch[2]) - 1, parseInt(isoMatch[3]));
             const latMatch = str.match(/^(\d{2})[\/\-](\d{2})[\/\-](\d{4})/);
             if (latMatch) return new Date(parseInt(latMatch[3]), parseInt(latMatch[2]) - 1, parseInt(latMatch[1]));
-            const MS = {ene:0,feb:1,mar:2,abr:3,may:4,jun:5,jul:6,ago:7,sep:8,oct:9,nov:10,dic:11,jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,oct:9,nov:10,dec:11,abr:3,jun:5};
+            const MS = {ene:0,feb:1,mar:2,abr:3,may:4,jun:5,jul:6,ago:7,sep:8,oct:9,nov:10,dic:11,jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,oct:9,nov:10,dec:11};
             const p = str.split(/\s+/);
             if (p.length >= 3) {
                 const day = parseInt(p[0]);
@@ -120,14 +122,16 @@
             const [posData,       setPosData]       = useState([]);
             const [valuationData, setValuationData] = useState([]);
             const [ordersData,    setOrdersData]    = useState([]);
+            const [stockRealData, setStockRealData] = useState({});
             const [fixedCosts,    setFixedCosts]    = useState(400000);
             const [dailyGoal,     setDailyGoal]     = useState(150000);
             const [coverageDays,  setCoverageDays]  = useState(10);
             const [activeTab,     setActiveTab]     = useState('import');
-            const [fileStatus,    setFileStatus]    = useState({ pos: 'idle', val: 'idle', ord: 'idle' });
-            const [fileNames,     setFileNames]     = useState({ pos: '', val: '', ord: '' });
+            const [fileStatus,    setFileStatus]    = useState({ pos: 'idle', val: 'idle', ord: 'idle', stk: 'idle' });
+            const [fileNames,     setFileNames]     = useState({ pos: '', val: '', ord: '', stk: '' });
             const [errorMsg,      setErrorMsg]      = useState('');
             const [dateRange,     setDateRange]     = useState({ from: '', to: '' });
+            const [logisticsFilter, setLogisticsFilter] = useState('ALL');
 
             const RC = window.Recharts;
 
@@ -201,8 +205,17 @@
                                 }
                             });
                             setOrdersData(dailySummary);
+                        } else if (type === 'stk') {
+                            const heads = raw[0].map(h => String(h).toLowerCase().trim());
+                            const nameIdx = heads.findIndex(h => h.includes('nombre') || h.includes('producto'));
+                            const stockIdx = heads.findIndex(h => h.includes('mano') || h.includes('disponible'));
+                            
+                            const mapping = {};
+                            raw.slice(1).forEach(r => {
+                                if (r[nameIdx]) mapping[norm(r[nameIdx])] = cleanNum(r[stockIdx]);
+                            });
+                            setStockRealData(mapping);
                         }
-                        
                         setFileStatus(p => ({ ...p, [type]: 'success' }));
                         setFileNames(p => ({ ...p, [type]: file.name }));
                     } catch (err) {
@@ -254,8 +267,12 @@
                 const purchasePlan = Object.values(invMap).map(i => {
                     const out = Math.max(i.pq, i.vq);
                     const avg = out / daysCount;
-                    const margin = i.nr > 0 ? (i.nr - i.c) / i.nr : 0;
-                    return { ...i, out, avg, sk: avg * Number(coverageDays), margin };
+                    const sk = avg * Number(coverageDays);
+                    const stockActual = stockRealData[norm(i.n)] || 0;
+                    let status = 'OK';
+                    if (stockActual <= 0) status = 'CRITICO';
+                    else if (stockActual < sk) status = 'COMPRAR';
+                    return { ...i, out, avg, sk, margin: i.nr > 0 ? (i.nr-i.c)/i.nr : 0, stockActual, status, deficit: Math.max(0, sk - stockActual) };
                 }).filter(p => p.out > 0).sort((a,b) => b.out - a.out);
 
                 const wNames = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
@@ -266,11 +283,9 @@
                 while (dk(it) <= toK) {
                     const dki = dk(it);
                     const net = curS.filter(s => dk(s.fecha) === dki).reduce((a,b) => a + b.nt, 0);
-                    
                     const daysOffset = Math.round((it - startDate) / 86400000);
                     const pDate = new Date(prevStart.getFullYear(), prevStart.getMonth(), prevStart.getDate() + daysOffset);
                     const pNet = prevS.filter(s => dk(s.fecha) === dk(pDate)).reduce((a,b) => a + b.nt, 0);
-                    
                     const ordDay = ordersMap[dki] || { p: 0, a: 0 };
                     totalOrders += ordDay.p;
 
@@ -280,34 +295,22 @@
                         Anterior: Math.round(pNet),
                         Meta: Number(dailyGoal), 
                         pedidos: ordDay.p,
-                        avgItems: ordDay.p > 0 ? Number((ordDay.a / ordDay.p).toFixed(2)) : 0
+                        ticket: ordDay.p > 0 ? Math.round(net / ordDay.p) : 0
                     });
                     it.setDate(it.getDate() + 1);
                 }
 
                 const tNet = Math.round(curS.reduce((a,b) => a + b.nt, 0));
                 const tCst = Math.round(Object.values(invMap).reduce((a,b) => a + b.c, 0));
-                const gM = tNet - tCst, pct = tNet > 0 ? gM / tNet : 0;
+                const gM = tNet - tCst;
                 
-                return { tNet, tCst, totalOrders, gM, nM: gM - Number(fixedCosts), be: pct > 0 ? Number(fixedCosts) / pct : 0, at: totalOrders > 0 ? Math.round(tNet / totalOrders) : 0, dStats, purchasePlan, daysCount, pct };
-            }, [posData, valuationData, ordersData, dateRange, fixedCosts, dailyGoal, coverageDays]);
+                return { tNet, tCst, totalOrders, gM, nM: gM - Number(fixedCosts), be: (gM/tNet) > 0 ? Number(fixedCosts) / (gM/tNet) : 0, at: totalOrders > 0 ? Math.round(tNet / totalOrders) : 0, dStats, purchasePlan, daysCount, pct: tNet > 0 ? gM/tNet : 0 };
+            }, [posData, valuationData, ordersData, stockRealData, dateRange, fixedCosts, dailyGoal, coverageDays]);
 
-            const handleExportLogistics = () => {
-                if (!report) return;
-                const exportData = report.purchasePlan.map(p => ({
-                    "Producto": p.n,
-                    "Total Vendido": Number(p.out.toFixed(2)),
-                    "Venta Promedio Diaria": Number(p.avg.toFixed(3)),
-                    [`Stock Sugerido (${coverageDays} dias)`]: Number(p.sk.toFixed(2)),
-                    "Venta Neta en Rango": Math.round(p.nr),
-                    "Costo Acumulado": Math.round(p.c),
-                    "Margen Bruto (%)": Number((p.margin * 100).toFixed(1))
-                }));
-                const ws = XLSX.utils.json_to_sheet(exportData);
-                const wb = XLSX.utils.book_new();
-                XLSX.utils.book_append_sheet(wb, ws, "Logistica");
-                XLSX.writeFile(wb, `Logistica_Odoo_${dateRange.from}.xlsx`);
-            };
+            const filteredLogistics = useMemo(() => {
+                if (!report) return [];
+                return logisticsFilter === 'ALL' ? report.purchasePlan : report.purchasePlan.filter(p => p.status === logisticsFilter);
+            }, [report, logisticsFilter]);
 
             return (
                 <div className="min-h-screen pb-20">
@@ -316,7 +319,7 @@
                             <div className="bg-emerald-600 p-3 rounded-2xl shadow-lg text-white"><Ico name="Package" size={32} /></div>
                             <div>
                                 <h1 className="text-2xl font-black text-slate-800 uppercase italic tracking-tighter">Odoo Analyzer PRO</h1>
-                                <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Enterprise Analytics v2.4</p>
+                                <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Enterprise Analytics v2.6</p>
                             </div>
                         </div>
                         <nav className="flex bg-slate-100 p-1.5 rounded-2xl mt-4 md:mt-0 gap-1">
@@ -338,207 +341,159 @@
 
                         {activeTab === 'import' && (
                             <div className="tab-content space-y-8">
-                                <div className="grid lg:grid-cols-3 gap-6">
-                                    <label className={`card-grad p-8 rounded-[2.5rem] border-4 border-dashed transition-all text-center cursor-pointer block ${fileStatus.pos === 'success' ? 'border-emerald-500 bg-emerald-50' : 'border-slate-200 hover:border-emerald-400'}`}>
-                                        <input type="file" onChange={e => onUpload(e,'pos')} className="hidden" accept=".xlsx,.xls,.csv" />
-                                        <div className="flex justify-center mb-4 text-emerald-600"><Ico name="ShoppingCart" size={32} /></div>
-                                        <h3 className="text-sm font-black uppercase">1. Ventas PoS (Pivot)</h3>
-                                        <p className="text-slate-400 text-[10px] mt-2 italic">{fileNames.pos || 'Sube reporte con Precio Total'}</p>
-                                    </label>
-                                    <label className={`card-grad p-8 rounded-[2.5rem] border-4 border-dashed transition-all text-center cursor-pointer block ${fileStatus.val === 'success' ? 'border-emerald-500 bg-emerald-50' : 'border-slate-200 hover:border-blue-400'}`}>
-                                        <input type="file" onChange={e => onUpload(e,'val')} className="hidden" accept=".xlsx,.xls,.csv" />
-                                        <div className="flex justify-center mb-4 text-blue-600"><Ico name="Activity" size={32} /></div>
-                                        <h3 className="text-sm font-black uppercase">2. Valoración Existencias</h3>
-                                        <p className="text-slate-400 text-[10px] mt-2 italic">{fileNames.val || 'Sube stock.valuation.layer'}</p>
-                                    </label>
-                                    <label className={`card-grad p-8 rounded-[2.5rem] border-4 border-dashed transition-all text-center cursor-pointer block ${fileStatus.ord === 'success' ? 'border-emerald-500 bg-emerald-50' : 'border-slate-200 hover:border-orange-400'}`}>
-                                        <input type="file" onChange={e => onUpload(e,'ord')} className="hidden" accept=".xlsx,.xls,.csv" />
-                                        <div className="flex justify-center mb-4 text-orange-600"><Ico name="FileText" size={32} /></div>
-                                        <h3 className="text-sm font-black uppercase">3. Análisis de Pedidos</h3>
-                                        <p className="text-slate-400 text-[10px] mt-2 italic">{fileNames.ord || 'Sube report.pos.order'}</p>
-                                    </label>
+                                <div className="grid lg:grid-cols-4 gap-6 text-center">
+                                    {['pos','val','ord','stk'].map(type => (
+                                        <label key={type} className={`card-grad p-8 rounded-[2.5rem] border-4 border-dashed transition-all cursor-pointer block ${fileStatus[type] === 'success' ? 'border-emerald-500 bg-emerald-50' : 'border-slate-200 hover:border-emerald-400'}`}>
+                                            <input type="file" onChange={e => onUpload(e, type)} className="hidden" accept=".xlsx,.xls,.csv" />
+                                            <div className={`flex justify-center mb-4 ${type === 'pos' ? 'text-emerald-600' : type === 'val' ? 'text-blue-600' : type === 'ord' ? 'text-orange-600' : 'text-indigo-600'}`}>
+                                                <Ico name={type === 'pos' ? 'ShoppingCart' : type === 'val' ? 'Activity' : type === 'ord' ? 'FileText' : 'Box'} size={32} />
+                                            </div>
+                                            <h3 className="text-sm font-black uppercase">{type.toUpperCase()}</h3>
+                                            <p className="text-slate-400 text-[10px] mt-2 italic truncate">{fileNames[type] || 'Haz clic para subir'}</p>
+                                        </label>
+                                    ))}
                                 </div>
                                 
                                 <div className="grid md:grid-cols-3 gap-6">
-                                    <div className="bg-slate-900 p-8 rounded-[2.5rem] text-white border-b-8 border-emerald-600">
-                                        <p className="text-[10px] font-black uppercase text-emerald-400 mb-2">Gastos Fijos</p>
+                                    <div className="bg-slate-900 p-8 rounded-[2.5rem] text-white border-b-8 border-emerald-600 shadow-xl">
+                                        <p className="text-[10px] font-black uppercase text-emerald-400 mb-2">Gastos Fijos Mensuales</p>
                                         <input type="number" value={fixedCosts} onChange={e => setFixedCosts(e.target.value)} className="bg-transparent text-2xl font-black outline-none w-full border-b border-slate-700" />
                                     </div>
-                                    <div className="bg-slate-900 p-8 rounded-[2.5rem] text-white border-b-8 border-blue-600">
-                                        <p className="text-[10px] font-black uppercase text-blue-400 mb-2">Meta Diaria</p>
+                                    <div className="bg-slate-900 p-8 rounded-[2.5rem] text-white border-b-8 border-blue-600 shadow-xl">
+                                        <p className="text-[10px] font-black uppercase text-blue-400 mb-2">Meta Venta Diaria</p>
                                         <input type="number" value={dailyGoal} onChange={e => setDailyGoal(e.target.value)} className="bg-transparent text-2xl font-black outline-none w-full border-b border-slate-700" />
                                     </div>
-                                    <div className="bg-slate-900 p-8 rounded-[2.5rem] text-white border-b-8 border-orange-600">
-                                        <p className="text-[10px] font-black uppercase text-orange-400 mb-2">Días Seguridad</p>
+                                    <div className="bg-slate-900 p-8 rounded-[2.5rem] text-white border-b-8 border-orange-600 shadow-xl">
+                                        <p className="text-[10px] font-black uppercase text-orange-400 mb-2">Días Stock Seguridad</p>
                                         <input type="number" value={coverageDays} onChange={e => setCoverageDays(e.target.value)} className="bg-transparent text-2xl font-black outline-none w-full border-b border-slate-700" />
                                     </div>
                                 </div>
-
                                 {posData.length > 0 && (
                                     <button onClick={() => setActiveTab('dashboard')} className="w-full bg-emerald-600 text-white py-6 rounded-3xl font-black text-xl shadow-2xl flex items-center justify-center gap-4 hover:bg-emerald-700 transition-all uppercase">
-                                        ANALIZAR DATOS <Ico name="ArrowRight" size={28} />
+                                        GENERAR REPORTES <Ico name="ArrowRight" size={28} />
                                     </button>
                                 )}
                             </div>
                         )}
 
-                        {activeTab === 'dashboard' && (
-                            report ? (
-                                <div className="tab-content space-y-8">
-                                    <div className="grid lg:grid-cols-3 gap-6">
-                                        <div className="lg:col-span-2 bg-white p-8 rounded-[2.5rem] border shadow-sm flex items-center gap-8">
-                                            <div className="bg-blue-600 p-4 rounded-3xl text-white shadow-lg"><Ico name="Calendar" size={28} /></div>
-                                            <div className="flex-1 grid grid-cols-2 gap-4">
-                                                <div>
-                                                    <label className="text-[10px] font-black uppercase text-slate-400 block mb-1">Desde</label>
-                                                    <input type="date" value={dateRange.from} onChange={e => setDateRange(p => ({...p, from: e.target.value}))} className="w-full" />
-                                                </div>
-                                                <div>
-                                                    <label className="text-[10px] font-black uppercase text-slate-400 block mb-1">Hasta</label>
-                                                    <input type="date" value={dateRange.to} onChange={e => setDateRange(p => ({...p, to: e.target.value}))} className="w-full" />
-                                                </div>
-                                            </div>
-                                        </div>
-                                        <div className="bg-slate-800 p-8 rounded-[2.5rem] text-white flex items-center justify-between border-b-8 border-emerald-500 shadow-xl">
+                        {activeTab === 'dashboard' && report && (
+                            <div className="tab-content space-y-8">
+                                <div className="grid lg:grid-cols-3 gap-6">
+                                    <div className="lg:col-span-2 bg-white p-8 rounded-[2.5rem] border shadow-sm flex items-center gap-8">
+                                        <div className="bg-blue-600 p-4 rounded-3xl text-white shadow-lg"><Ico name="Calendar" size={28} /></div>
+                                        <div className="flex-1 grid grid-cols-2 gap-4">
                                             <div>
-                                                <p className="text-[10px] font-black text-slate-400 uppercase mb-1">Margen Real</p>
-                                                <p className="text-4xl font-black text-emerald-400 italic">{(report.pct * 100).toFixed(1)}%</p>
+                                                <label className="text-[10px] font-black uppercase text-slate-400 block mb-1">Desde</label>
+                                                <input type="date" value={dateRange.from} onChange={e => setDateRange(p => ({...p, from: e.target.value}))} className="w-full" />
+                                            </div>
+                                            <div>
+                                                <label className="text-[10px] font-black uppercase text-slate-400 block mb-1">Hasta</label>
+                                                <input type="date" value={dateRange.to} onChange={e => setDateRange(p => ({...p, to: e.target.value}))} className="w-full" />
                                             </div>
                                         </div>
                                     </div>
-
-                                    <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4 font-black">
-                                        <div className="bg-white p-6 rounded-3xl border border-b-8 border-b-blue-600 shadow-sm"><p className="text-[10px] text-slate-400 mb-1">Venta Neta</p><h2 className="text-xl">${fmt(report.tNet)}</h2></div>
-                                        <div className="bg-white p-6 rounded-3xl border border-b-8 border-b-rose-500 shadow-sm"><p className="text-[10px] text-slate-400 mb-1">Costo Vta</p><h2 className="text-xl text-rose-600">${fmt(report.tCst)}</h2></div>
-                                        <div className="bg-blue-600 p-6 rounded-3xl text-white shadow-lg border-b-8 border-blue-800"><p className="text-[10px] text-blue-200 mb-1 uppercase">Utilidad Bruta</p><h2 className="text-xl italic">${fmt(report.gM)}</h2></div>
-                                        <div className={`p-6 rounded-3xl text-white shadow-lg border-b-8 ${report.nM > 0 ? 'bg-emerald-700 border-emerald-900' : 'bg-rose-700 border-rose-900'}`}><p className="text-[10px] text-white/70 mb-1 uppercase">Utilidad Neta</p><h2 className="text-xl italic">${fmt(report.nM)}</h2></div>
-                                        <div className="bg-white p-6 rounded-3xl border border-b-8 border-b-indigo-600 shadow-sm text-indigo-600"><p className="text-[10px] text-slate-400 mb-1">Ticket Prom.</p><h2 className="text-xl">${fmt(report.at)}</h2></div>
-                                        <div className="bg-white p-6 rounded-3xl border border-b-8 border-b-orange-600 shadow-sm text-orange-600"><p className="text-[10px] text-slate-400 mb-1">Pedidos</p><h2 className="text-xl">{report.totalOrders}</h2></div>
-                                    </div>
-
-                                    <div className="grid lg:grid-cols-3 gap-8">
-                                        <div className="lg:col-span-2 bg-white p-10 rounded-[3rem] border shadow-sm">
-                                            <h3 className="text-xl font-black mb-8 italic uppercase flex items-center gap-3">
-                                                <Ico name="TrendingUp" className="text-blue-600" /> Evolución Financiera vs Anterior
-                                            </h3>
-                                            <div style={{height:350}}>
-                                                <RC.ResponsiveContainer width="100%" height="100%">
-                                                    <RC.ComposedChart data={report.dStats}>
-                                                        <RC.CartesianGrid strokeDasharray="3 3" vertical={false} />
-                                                        <RC.XAxis dataKey="label" fontSize={10} axisLine={false} tickLine={false} />
-                                                        <RC.YAxis fontSize={12} axisLine={false} tickLine={false} tickFormatter={v => `$${(v/1000).toFixed(0)}k`} />
-                                                        <RC.Tooltip cursor={{fill:'#f8fafc'}} contentStyle={{borderRadius:'24px', border:'none', boxShadow:'0 10px 30px rgba(0,0,0,0.1)'}} formatter={v => [`$${fmt(v)}`]} />
-                                                        <RC.Legend verticalAlign="top" align="right" height={40} />
-                                                        <RC.Bar dataKey="Anterior" name="Periodo Anterior" fill="#e2e8f0" radius={[6,6,0,0]} barSize={25} />
-                                                        <RC.Bar dataKey="Actual" name="Venta Actual" fill="#2563eb" radius={[6,6,0,0]} barSize={25} />
-                                                        <RC.Line type="monotone" dataKey="Meta" name="Meta Diaria" stroke="#f43f5e" strokeWidth={3} strokeDasharray="8 8" dot={false} />
-                                                    </RC.ComposedChart>
-                                                </RC.ResponsiveContainer>
-                                            </div>
-                                        </div>
-
-                                        {/* SECCIÓN: Resumen del Periodo */}
-                                        <div className="bg-white rounded-[3.5rem] border shadow-lg overflow-hidden flex flex-col h-full">
-                                            <div className="p-8 border-b bg-slate-50 text-center">
-                                                <h3 className="text-xs font-black text-slate-800 uppercase italic tracking-widest">Resumen del Periodo</h3>
-                                            </div>
-                                            <div className="p-8 space-y-8 flex-1">
-                                                <div>
-                                                    <p className="text-[10px] font-black text-slate-400 uppercase mb-2">Venta de Equilibrio</p>
-                                                    <p className="text-3xl font-black text-rose-600 italic tracking-tighter">${fmt(report.be)}</p>
-                                                    <div className="w-full bg-slate-100 h-2 rounded-full mt-2 overflow-hidden">
-                                                        <div className="bg-emerald-500 h-full transition-all" style={{width: `${Math.min(100, (report.tNet / report.be) * 100)}%`}}></div>
-                                                    </div>
-                                                </div>
-                                                <div className="grid grid-cols-2 gap-4">
-                                                    <div className="bg-blue-50 p-4 rounded-2xl border border-blue-100 text-center">
-                                                        <p className="text-[9px] font-black text-blue-400 uppercase">Días</p>
-                                                        <p className="text-xl font-black text-blue-700">{report.daysCount}</p>
-                                                    </div>
-                                                    <div className="bg-orange-50 p-4 rounded-2xl border border-orange-100 text-center">
-                                                        <p className="text-[9px] font-black text-orange-400 uppercase">Venta/Día</p>
-                                                        <p className="text-xl font-black text-orange-700">${fmt(report.tNet / report.daysCount)}</p>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                            <div className={`p-8 text-white text-center font-black italic uppercase tracking-tighter ${report.nM > 0 ? 'bg-slate-900' : 'bg-rose-900'}`}>
-                                                {report.nM > 0 ? 'RENTABLE' : 'BAJO EQUILIBRIO'}
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    {/* SECCIÓN OPERATIVA: Volumen y Densidad */}
-                                    <div className="grid lg:grid-cols-2 gap-8">
-                                        <div className="bg-white p-10 rounded-[3rem] border shadow-sm">
-                                            <h3 className="text-lg font-black mb-6 italic uppercase flex items-center gap-3">
-                                                <Ico name="ShoppingCart" className="text-orange-600" /> Volumen de Pedidos (Día)
-                                            </h3>
-                                            <div style={{height:250}}>
-                                                <RC.ResponsiveContainer width="100%" height="100%">
-                                                    <RC.BarChart data={report.dStats}>
-                                                        <RC.CartesianGrid strokeDasharray="3 3" vertical={false} />
-                                                        <RC.XAxis dataKey="label" fontSize={10} axisLine={false} tickLine={false} />
-                                                        <RC.YAxis fontSize={10} axisLine={false} tickLine={false} />
-                                                        <RC.Tooltip cursor={{fill:'#fff7ed'}} contentStyle={{borderRadius:'20px', border:'none', boxShadow:'0 10px 20px rgba(0,0,0,0.05)'}} />
-                                                        <RC.Bar dataKey="pedidos" name="Pedidos" fill="#ea580c" radius={[4,4,0,0]} />
-                                                    </RC.BarChart>
-                                                </RC.ResponsiveContainer>
-                                            </div>
-                                        </div>
-                                        <div className="bg-white p-10 rounded-[3rem] border shadow-sm">
-                                            <h3 className="text-lg font-black mb-6 italic uppercase flex items-center gap-3">
-                                                <Ico name="Package" className="text-emerald-600" /> Artículos por Pedido (Densidad)
-                                            </h3>
-                                            <div style={{height:250}}>
-                                                <RC.ResponsiveContainer width="100%" height="100%">
-                                                    <RC.AreaChart data={report.dStats}>
-                                                        <RC.CartesianGrid strokeDasharray="3 3" vertical={false} />
-                                                        <RC.XAxis dataKey="label" fontSize={10} axisLine={false} tickLine={false} />
-                                                        <RC.YAxis fontSize={10} axisLine={false} tickLine={false} />
-                                                        <RC.Tooltip contentStyle={{borderRadius:'20px', border:'none', boxShadow:'0 10px 20px rgba(0,0,0,0.05)'}} />
-                                                        <RC.Area type="monotone" dataKey="avgItems" name="Art/Ped" stroke="#10b981" fill="#ecfdf5" strokeWidth={3} />
-                                                    </RC.AreaChart>
-                                                </RC.ResponsiveContainer>
-                                            </div>
+                                    <div className="bg-slate-800 p-8 rounded-[2.5rem] text-white flex items-center justify-between border-b-8 border-emerald-500 shadow-xl">
+                                        <div>
+                                            <p className="text-[10px] font-black text-slate-400 uppercase mb-1">Margen Real</p>
+                                            <p className="text-4xl font-black text-emerald-400 italic">{(report.pct * 100).toFixed(1)}%</p>
                                         </div>
                                     </div>
                                 </div>
-                            ) : (
-                                <div className="text-center py-40 bg-white rounded-[4rem] border-4 border-dashed border-slate-100 uppercase italic text-slate-300 font-black">
-                                    Carga los 3 archivos para visualizar el dashboard
+
+                                <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4 font-black">
+                                    <div className="bg-white p-6 rounded-3xl border border-b-8 border-b-blue-600 shadow-sm"><p className="text-[10px] text-slate-400 mb-1">Venta Neta</p><h2 className="text-xl">${fmt(report.tNet)}</h2></div>
+                                    <div className="bg-white p-6 rounded-3xl border border-b-8 border-b-rose-500 shadow-sm"><p className="text-[10px] text-slate-400 mb-1">Costo Vta</p><h2 className="text-xl text-rose-600">${fmt(report.tCst)}</h2></div>
+                                    <div className="bg-blue-600 p-6 rounded-3xl text-white shadow-lg border-b-8 border-blue-800"><p className="text-[10px] text-blue-200 mb-1 uppercase">Utilidad Bruta</p><h2 className="text-xl italic">${fmt(report.gM)}</h2></div>
+                                    <div className={`p-6 rounded-3xl text-white shadow-lg border-b-8 ${report.nM > 0 ? 'bg-emerald-700 border-emerald-900' : 'bg-rose-700 border-rose-900'}`}><p className="text-[10px] text-white/70 mb-1 uppercase">Utilidad Neta</p><h2 className="text-xl italic">${fmt(report.nM)}</h2></div>
+                                    <div className="bg-white p-6 rounded-3xl border border-b-8 border-b-indigo-600 shadow-sm text-indigo-600"><p className="text-[10px] text-slate-400 mb-1">Ticket Prom.</p><h2 className="text-xl">${fmt(report.at)}</h2></div>
+                                    <div className="bg-white p-6 rounded-3xl border border-b-8 border-b-orange-600 shadow-sm text-orange-600"><p className="text-[10px] text-slate-400 mb-1">Pedidos</p><h2 className="text-xl">{report.totalOrders}</h2></div>
                                 </div>
-                            )
+
+                                <div className="grid lg:grid-cols-2 gap-8">
+                                    <div className="bg-white p-10 rounded-[3rem] border shadow-sm">
+                                        <h3 className="text-xl font-black mb-8 italic uppercase flex items-center gap-3">
+                                            <Ico name="TrendingUp" className="text-blue-600" /> Rendimiento de Ventas
+                                        </h3>
+                                        <div style={{height:300}}>
+                                            <RC.ResponsiveContainer width="100%" height="100%">
+                                                <RC.ComposedChart data={report.dStats}>
+                                                    <RC.CartesianGrid strokeDasharray="3 3" vertical={false} />
+                                                    <RC.XAxis dataKey="label" fontSize={10} axisLine={false} tickLine={false} />
+                                                    <RC.YAxis fontSize={12} axisLine={false} tickLine={false} tickFormatter={v => `$${(v/1000).toFixed(0)}k`} />
+                                                    <RC.Tooltip contentStyle={{borderRadius:'24px', border:'none', boxShadow:'0 10px 30px rgba(0,0,0,0.1)'}} />
+                                                    <RC.Bar dataKey="Actual" name="Venta Actual" fill="#2563eb" radius={[6,6,0,0]} barSize={25} />
+                                                    <RC.Line type="monotone" dataKey="Meta" name="Meta" stroke="#f43f5e" strokeWidth={3} strokeDasharray="8 8" dot={false} />
+                                                </RC.ComposedChart>
+                                            </RC.ResponsiveContainer>
+                                        </div>
+                                    </div>
+
+                                    <div className="bg-white p-10 rounded-[3rem] border shadow-sm">
+                                        <h3 className="text-xl font-black mb-8 italic uppercase flex items-center gap-3">
+                                            <Ico name="BarChart" className="text-indigo-600" /> Pedidos y Eficiencia
+                                        </h3>
+                                        <div style={{height:300}}>
+                                            <RC.ResponsiveContainer width="100%" height="100%">
+                                                <RC.ComposedChart data={report.dStats}>
+                                                    <RC.CartesianGrid strokeDasharray="3 3" vertical={false} />
+                                                    <RC.XAxis dataKey="label" fontSize={10} axisLine={false} tickLine={false} />
+                                                    <RC.YAxis yAxisId="left" fontSize={12} axisLine={false} tickLine={false} />
+                                                    <RC.YAxis yAxisId="right" orientation="right" fontSize={12} axisLine={false} tickLine={false} tickFormatter={v => `$${(v/1000).toFixed(0)}k`} />
+                                                    <RC.Tooltip contentStyle={{borderRadius:'24px'}} />
+                                                    <RC.Bar yAxisId="left" dataKey="pedidos" name="N° Pedidos" fill="#6366f1" radius={[6,6,0,0]} barSize={20} />
+                                                    <RC.Line yAxisId="right" type="stepAfter" dataKey="ticket" name="Ticket Promedio" stroke="#f59e0b" strokeWidth={3} dot={{ r: 4, fill:'#f59e0b' }} />
+                                                </RC.ComposedChart>
+                                            </RC.ResponsiveContainer>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
                         )}
 
                         {activeTab === 'procurement' && report && (
                             <div className="tab-content space-y-8">
-                                <div className="bg-blue-600 p-10 rounded-[3rem] text-white flex items-center justify-between shadow-xl">
+                                <div className="bg-blue-600 p-10 rounded-[3rem] text-white flex flex-col md:flex-row items-center justify-between shadow-xl gap-6">
                                     <div className="flex items-center gap-6">
-                                        <div className="bg-blue-800 p-5 rounded-3xl shadow-inner"><Ico name="Truck" size={48} /></div>
+                                        <div className="bg-blue-800 p-5 rounded-3xl"><Ico name="Truck" size={48} /></div>
                                         <div>
-                                            <h2 className="text-3xl font-black italic uppercase tracking-tighter">Logística</h2>
-                                            <p className="opacity-80">Stock sugerido para {coverageDays} días.</p>
+                                            <h2 className="text-3xl font-black italic uppercase tracking-tighter">Plan de Abastecimiento</h2>
+                                            <p className="opacity-80">Cobertura: <strong>{coverageDays} días</strong>.</p>
                                         </div>
                                     </div>
-                                    <button onClick={handleExportLogistics} className="bg-emerald-500 hover:bg-emerald-600 text-white px-8 py-5 rounded-3xl font-black uppercase text-sm shadow-xl flex items-center gap-3">
-                                        <Ico name="Download" size={20} /> Exportar Excel
-                                    </button>
+                                    <div className="flex bg-blue-700 p-2 rounded-2xl gap-1">
+                                        {['ALL', 'COMPRAR', 'CRITICO', 'OK'].map(f => (
+                                            <button key={f} onClick={() => setLogisticsFilter(f)} 
+                                                className={`px-4 py-2 rounded-xl text-[10px] font-black transition-all ${logisticsFilter === f ? 'bg-white text-blue-600' : 'text-blue-100 hover:bg-blue-600'}`}>
+                                                {f === 'ALL' ? 'TODO' : f}
+                                            </button>
+                                        ))}
+                                    </div>
                                 </div>
+
                                 <div className="bg-white rounded-[3.5rem] shadow-sm overflow-hidden border">
                                     <table className="w-full text-left">
                                         <thead className="bg-slate-50 text-[10px] font-black uppercase text-slate-400 border-b">
                                             <tr>
-                                                <th className="px-10 py-6">Producto</th>
-                                                <th className="text-right px-10 py-6">Vendido (u)</th>
-                                                <th className="text-right px-10 py-6 bg-blue-50 text-blue-600 italic">Sugerido ({coverageDays}d)</th>
+                                                <th className="px-8 py-6">Producto</th>
+                                                <th className="text-right px-6 py-6">Stock Actual</th>
+                                                <th className="text-right px-6 py-6">Sugerido</th>
+                                                <th className="text-right px-6 py-6 text-blue-600 font-black italic">A Comprar</th>
+                                                <th className="text-center px-8 py-6">Estado</th>
                                             </tr>
                                         </thead>
-                                        <tbody className="divide-y font-bold text-slate-700">
-                                            {report.purchasePlan.map((p, idx) => (
-                                                <tr key={idx} className="hover:bg-slate-50 transition-colors">
-                                                    <td className="px-10 py-5 font-black text-slate-800">{p.n}</td>
-                                                    <td className="px-10 py-5 text-right">{p.out.toFixed(1)}</td>
-                                                    <td className="px-10 py-5 text-right font-black text-2xl text-blue-600 bg-blue-50 italic">{p.sk.toFixed(1)}</td>
+                                        <tbody className="divide-y font-bold">
+                                            {filteredLogistics.map((p, idx) => (
+                                                <tr key={idx} className="hover:bg-slate-50">
+                                                    <td className="px-8 py-5 font-black text-slate-800 text-sm">{p.n}</td>
+                                                    <td className="px-6 py-5 text-right font-black">{p.stockActual.toFixed(1)}</td>
+                                                    <td className="px-6 py-5 text-right text-slate-400">{p.sk.toFixed(1)}</td>
+                                                    <td className="px-6 py-5 text-right text-2xl text-blue-600 italic">{p.deficit > 0 ? p.deficit.toFixed(1) : '-'}</td>
+                                                    <td className="px-8 py-5 text-center">
+                                                        <span className={`px-4 py-1.5 rounded-full text-[9px] font-black uppercase ${
+                                                            p.status === 'CRITICO' ? 'bg-rose-100 text-rose-600' :
+                                                            p.status === 'COMPRAR' ? 'bg-blue-100 text-blue-600' : 'bg-emerald-100 text-emerald-600'
+                                                        }`}> {p.status} </span>
+                                                    </td>
                                                 </tr>
                                             ))}
                                         </tbody>
@@ -549,7 +504,7 @@
                     </main>
 
                     <footer className="max-w-7xl mx-auto mt-24 py-12 border-t text-center opacity-30 italic font-black text-[10px] uppercase tracking-[0.5em]">
-                        Odoo Strategic BI · v2.4 Final Analysis
+                        Odoo Strategic BI · v2.6 Final Analysis
                     </footer>
                 </div>
             );
